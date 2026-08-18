@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -5,18 +6,35 @@ __pycache__/
 .venv/
 venv/
 env/
+
+# Environment
 .env
+
+# Database
 data/
 *.db
 *.sqlite
 *.sqlite3
+
+# Media storage (evidence frames/clips)
+media/
+
+# Test / lint
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Build
 dist/
 build/
 *.egg-info/
+
+# IDE
 .idea/
 .vscode/
+
+# OS
+.DS_Store
+Thumbs.db

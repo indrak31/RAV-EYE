@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
     LOG_LEVEL: str = "info"
     CORS_ORIGINS: str = "*"
+    MEDIA_DIR: str = "./media"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -37,9 +38,14 @@ class Settings(BaseSettings):
             db_file = Path(db_path)
             db_file.parent.mkdir(parents=True, exist_ok=True)
 
+    def ensure_media_dir(self) -> None:
+        """Create the media directory if needed."""
+        Path(self.MEDIA_DIR).mkdir(parents=True, exist_ok=True)
+
 
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
     settings.ensure_sqlite_dir()
+    settings.ensure_media_dir()
     return settings

@@ -22,6 +22,7 @@ Nice-to-have:
 - `pydantic-settings` for env loading.
 - SQLite + Postgres parity traps (e.g., `DateTime(timezone=True)` behavior).
 - `uvicorn` + `--reload` workflow.
+- `docker compose` for Postgres.
 
 ---
 
@@ -48,16 +49,23 @@ Traffic Violation/
 |   |   +-- case.py            # Request/response Pydantic models.
 |   +-- services/              # Business logic (no HTTP here).
 |       +-- ingest.py          # Persist Case + cascades; idempotency.
+|       +-- evidence_store.py  # Disk-backed media storage (frames/clips).
+|       +-- case_service.py    # Status transitions, list filters, review workflow.
 |       +-- serialization.py   # ORM -> Pydantic projectors.
 +-- tests/
 |   +-- conftest.py            # Sets DATABASE_URL to a fresh SQLite before app import.
-|   +-- test_smoke.py          # Day 1 acceptance tests.
-+-- requirements.txt
+|   +-- test_smoke.py          # Contract surface tests.
+|   +-- test_evidence_store.py # Media storage round-trip.
+|   +-- test_case_service.py   # Status transitions, list filters, review workflow.
+|   +-- test_analytics.py      # Group-by queries, date filters.
++-- requirements.txt           # Pinned deps (install with `pip install -r requirements.txt`)
 +-- .env.example
 +-- .gitignore
 +-- README.md
 +-- plan.md                    # Schedule, owners, progress log.
 +-- skill.md                   # This file.
++-- docker-compose.yml         # Postgres 15 (profile db), API (profile api)
++-- Dockerfile                 # Python 3.12 slim image
 ```
 
 **Layering rule:** `api/*` calls `services/*` calls `models/*`. Never import `api.*` from `services` or `models`. Pydantic schemas live in `schemas/` and cross both layers.
@@ -71,21 +79,34 @@ Traffic Violation/
 python -m venv .venv
 & .venv\Scripts\Activate.ps1
 
-# 2. Install
+# 2. Install (all deps including test deps are in requirements.txt)
 pip install -r requirements.txt
-pip install pytest "httpx[http2]"   # tests deps; add to requirements.txt before merging
 
 # 3. Configure
 Copy-Item .env.example .env
 # Edit DATABASE_URL or leave the SQLite default.
 
-# 4. Run
+# 4. Run (SQLite)
 uvicorn app.main:app --reload
 # Swagger UI:  http://127.0.0.1:8000/docs
 # ReDoc:       http://127.0.0.1:8000/redoc
 
 # 5. Test
 pytest -q
+```
+
+### With Docker (Postgres)
+
+```powershell
+# Start Postgres only
+docker compose --profile db up -d
+
+# Run API against Postgres
+$env:DATABASE_URL="postgresql+psycopg://tv:tv@localhost:5432/tv"
+uvicorn app.main:app --reload
+
+# Or run full stack (API + Postgres)
+docker compose --profile db --profile api up -d
 ```
 
 ---
@@ -135,6 +156,7 @@ pytest -q
 - The `client` fixture (session-scoped) starts the app with its lifespan so `create_all` runs.
 - New tests must hit the real route (through `TestClient`), not call the service function directly. We test contracts here.
 - Stubs are asserted to return `501` until the implementing PR lands.
+- **Test isolation:** `conftest.py` clears all tables after each test because services call `commit()` explicitly.
 
 ---
 
@@ -175,6 +197,14 @@ pip install psycopg[binary]
 ```
 That's it. `app/db.py` already adjusts `connect_args` based on the URL scheme. `init_db()` calls `create_all` against Postgres the same way.
 
+### 6.4 Add a new service (Alok's pattern)
+
+1. Create `app/services/<name>.py` with pure functions (no HTTP, no FastAPI imports).
+2. Functions accept `db: Session` as first arg; own the transaction (`commit`/`rollback`).
+3. Raise custom exceptions (`CaseNotFoundError`, `CaseNotReviewableError`) for business rule violations.
+4. Import and call from the corresponding `app/api/<endpoint>.py` route.
+5. Add tests in `tests/test_<name>.py` — test the service directly AND the endpoint via `TestClient`.
+
 ---
 
 ## 7. Anti-Patterns to Avoid
@@ -185,6 +215,7 @@ That's it. `app/db.py` already adjusts `connect_args` based on the URL scheme. `
 - Using `Enum` value strings as ordinals. Always compare with the Enum member or its `.value`.
 - Hard-coding `"ingested"`. Use `CaseStatus.ingested`.
 - Adding a new endpoint without a row in `docs/api-contract.md` — the PR review will block on this.
+- Using `join()` in `list_cases` for plate filter — use `Case.vehicle.has(Vehicle.plate.ilike(...))` to avoid cartesian product warnings.
 
 ---
 
@@ -199,6 +230,10 @@ That's it. `app/db.py` already adjusts `connect_args` based on the URL scheme. `
 | "What `status` values can a Case have?"               | `app/schemas/enums.py:CaseStatus`                  |
 | "Why did my test fail with a 422?"                    | Mismatched Pydantic schema vs your request body — see `app/schemas/case.py`. |
 | "How do I 501 a not-yet-implemented endpoint?"        | `app/api/stub.py:not_implemented("D3-5")`          |
+| "How to save a frame/clip from CV pipeline?"          | `app/services/evidence_store.py:save_frame()` / `save_clip()` |
+| "How to list cases with filters?"                     | `app/services/case_service.py:list_cases()`       |
+| "How to review a case (approve/reject)?"              | `app/services/case_service.py:review_case()`      |
+| "How to run analytics queries?"                       | `app/api/analytics.py` (endpoint) or service funcs |
 
 ---
 
@@ -207,3 +242,4 @@ That's it. `app/db.py` already adjusts `connect_args` based on the URL scheme. `
 Append a one-liner when you refine this skill sheet.
 
 - `2026-08-17 — Backend Lead — initial skill.md written for Day 1 onboarding.`
+- `2026-08-18 — Alok — added services (evidence_store, case_service), analytics endpoint, Docker, test conventions, anti-patterns for join vs has().`

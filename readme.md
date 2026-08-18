@@ -4,8 +4,9 @@ A FastAPI service that ingests traffic-violation detections from a computer-visi
 reviewers approve or reject each case, generates challan mocks, exposes analytics for the
 dashboard, and broadcasts live case events over WebSocket.
 
-**Status:** Day 1 — [`docs/api-contract.md`](docs/api-contract.md) v1 published; `POST /api/ingest`
-fully working; remaining endpoints stubbed to `501` per plan.
+**Status:** Day 1-2 — `POST /api/ingest` fully working; `GET /api/analytics` implemented;
+`GET /api/cases`, `GET /api/cases/{id}`, `PATCH /api/cases/{id}/review` stubbed to `501` (planned D3-5);
+`POST /api/challan` and `WS /api/stream` stubbed to `501`/`1011` (planned D5-7).
 
 ---
 
@@ -16,22 +17,22 @@ fully working; remaining endpoints stubbed to `501` per plan.
 - **Zero infra:** no auth, no microservices, no message queue. Suitable for a hackathon.
 - **Contract-first:** `docs/api-contract.md` is the source of truth; every PR that changes an
   endpoint shape edits the contract in the same PR.
-- **Tested:** smoke tests cover all 8 endpoints (8/8 passing on Day 1).
+- **Tested:** 49 tests passing (smoke + evidence store + case service + analytics).
 
 ---
 
 ## API Surface (v1)
 
-| #  | Method   | Path                          | Status (Day 1) | Planned (Day) |
-|----|----------|-------------------------------|----------------|---------------|
-| 1  | `POST`   | `/api/ingest`                 | 201 / 200      | D1-2 (done)   |
-| 2  | `GET`    | `/api/cases`                  | 501            | D3-5          |
-| 3  | `GET`    | `/api/cases/{case_id}`        | 501            | D3-5          |
-| 4  | `PATCH`  | `/api/cases/{case_id}/review` | 501            | D3-5          |
-| 5  | `POST`   | `/api/challan`                | 501            | D5-7          |
-| 6  | `GET`    | `/api/analytics`              | 501            | D5-7          |
-| 7  | `WS`     | `/api/stream`                 | 1011 (stub)    | D5-7          |
-| 8  | `GET`    | `/health`                     | 200            | D1 (done)     |
+| #  | Method   | Path                          | Status        | Planned (Day) |
+|----|----------|-------------------------------|---------------|---------------|
+| 1  | `POST`   | `/api/ingest`                 | 201 / 200     | D1-2 (done)   |
+| 2  | `GET`    | `/api/cases`                  | 501           | D3-5          |
+| 3  | `GET`    | `/api/cases/{case_id}`        | 501           | D3-5          |
+| 4  | `PATCH`  | `/api/cases/{case_id}/review` | 501           | D3-5          |
+| 5  | `POST`   | `/api/challan`                | 501           | D5-7          |
+| 6  | `GET`    | `/api/analytics`              | **200**       | D5-7 (done)   |
+| 7  | `WS`     | `/api/stream`                 | 1011 (stub)   | D5-7          |
+| 8  | `GET`    | `/health`                     | 200           | D1 (done)     |
 
 Full request/response shapes, enums, and WS events: see [`docs/api-contract.md`](docs/api-contract.md).
 
@@ -44,12 +45,11 @@ Full request/response shapes, enums, and WS events: see [`docs/api-contract.md`]
 python -m venv .venv
 & .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install pytest "httpx[http2]"      # test deps
 
 Copy-Item .env.example .env             # default: SQLite at ./data/tv.db
 
 uvicorn app.main:app --reload          # http://127.0.0.1:8000/docs
-pytest -q                               # 8 passed
+pytest -q                               # 49 passed
 ```
 
 ### End-to-end smoke from PowerShell
@@ -66,12 +66,26 @@ $body = @'
     { "kind": "image", "ref": "s3://tv-bucket/demo-001/001.jpg" }
   ]
 }
-'@
+@
 Invoke-WebRequest -Uri http://127.0.0.1:8000/api/ingest -Method POST `
   -ContentType application/json -Body $body
 # -> 201 {"case_id":"...","status":"ingested","created_at":"...","replayed":false}
 
 Invoke-WebRequest -Uri http://127.0.0.1:8000/health   # -> {"db":"ok", "status":"ok", ...}
+
+# Analytics (now implemented)
+Invoke-WebRequest -Uri http://127.0.0.1:8000/api/analytics?group_by=type
+```
+
+### With Docker (Postgres)
+
+```powershell
+# Start Postgres only
+docker compose --profile db up -d
+
+# Run API against Postgres
+$env:DATABASE_URL="postgresql+psycopg://tv:tv@localhost:5432/tv"
+uvicorn app.main:app --reload
 ```
 
 ---
@@ -80,17 +94,26 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/health   # -> {"db":"ok", "status":
 
 ```
 app/
-+-- main.py            FastAPI factory + lifespan (create_all on startup)
-+-- config.py           pydantic-settings (.env)
-+-- db.py               SQLAlchemy engine / SessionLocal / Base / init_db / get_db
-+-- api/                One router per endpoint group
-+-- models/             Case, EvidenceItem, Vehicle, Officer (SQLAlchemy ORM)
-+-- schemas/            enums + Pydantic request/response models
-+-- services/           ingest + serialization business logic
++-- main.py                 FastAPI factory + lifespan (create_all on startup)
++-- config.py               pydantic-settings (.env)
++-- db.py                   SQLAlchemy engine / SessionLocal / Base / init_db / get_db
++-- api/                    One router per endpoint group
+|   +-- health.py  ingest.py  cases.py  challan.py  analytics.py  stream.py  stub.py
++-- models/                 Case, EvidenceItem, Vehicle, Officer (SQLAlchemy ORM)
++-- schemas/                enums + Pydantic request/response models
++-- services/               Business logic (Ingra owns routes, Alok owns services)
+|   +-- ingest.py           Persist Case + cascades; idempotency on client_request_id
+|   +-- evidence_store.py   Disk-backed media storage (frames/clips under media/{date}/)
+|   +-- case_service.py     Status transitions, list filters, review workflow
+|   +-- serialization.py    ORM -> Pydantic projectors
 docs/
-+-- api-contract.md     v1 contract — edit FIRST; code follows
-tests/                  pytest; conftest pins a fresh SQLite DB
-readme.md  plan.md  skill.md  requirements.txt  .env.example
++-- api-contract.md         v1 contract — edit FIRST; code follows
+tests/                      pytest; conftest pins a fresh SQLite DB
++-- test_smoke.py           Contract surface tests
++-- test_evidence_store.py  Media storage round-trip
++-- test_case_service.py    Status transitions, list filters, review workflow
++-- test_analytics.py       Group-by queries, date filters
+readme.md  plan.md  skill.md  requirements.txt  .env.example  docker-compose.yml  Dockerfile
 ```
 
 For an in-depth tour including layering and conventions, read [`skill.md`](skill.md).
@@ -110,6 +133,7 @@ All settings come from `.env` (or real environment variables):
 | `HOST` / `PORT` | `127.0.0.1` / `8000`         | For local uvicorn only.                    |
 | `LOG_LEVEL`     | `info`                       | root logger level.                         |
 | `CORS_ORIGINS`  | `*`                          | CSV or `*`.                                |
+| `MEDIA_DIR`     | `./media`                    | Evidence frames/clips storage root.        |
 
 **Postgres:**
 ```bash
@@ -137,24 +161,37 @@ Key enumerations (see `app/schemas/enums.py`):
 
 ---
 
+## Services (Alok's scope)
+
+| Module | Purpose |
+|--------|---------|
+| `evidence_store.py` | `save_frame(bytes) -> evidence_id`, `save_clip(path) -> evidence_id`, `get_media(evidence_id) -> FileResponse`. Files stored under `media/{YYYY-MM-DD}/{uuid}.ext`. |
+| `case_service.py` | `list_cases(filters, pagination)`, `review_case(case_id, decision)`, `transition_to_in_review()`, `is_challan_eligible()`, `mark_challan_issued()`. |
+| `analytics.py` (endpoint) | Real SQLAlchemy `GROUP BY` on `violation_type`, `camera_id`, `hour(occurred_at)` with `from`/`to` date filters. |
+
+---
+
 ## Testing
 
 ```bash
-pytest                 # all tests
+pytest                 # all 49 tests
 pytest -q              # quiet
 pytest tests/test_smoke.py::test_health   # single test
+pytest tests/test_analytics.py            # analytics tests
+pytest tests/test_case_service.py         # case service tests
+pytest tests/test_evidence_store.py       # evidence store tests
 ```
 
 Tests use FastAPI's `TestClient` with the lifespan enabled, so `create_all()` runs on the test DB
 once per session. The `conftest.py` sets `DATABASE_URL` to a fresh `./data/tv-test.db` before any
-`from app.main import ...`.
+`from app.main import ...`. Tables are cleared after each test for isolation.
 
-| Day | Test directory expectation                                     |
-|-----|----------------------------------------------------------------|
-| D1  | `tests/test_smoke.py` — 8 tests across the contract surface.   |
-| D3-5 | Add `tests/test_cases.py` for list/detail/review.           |
-| D5-7 | Add `tests/test_challan.py`, `test_analytics.py`, `test_stream.py`. |
-| D9-11 | Add `tests/test_integration.py` for end-to-end CV push.      |
+| Test file | Coverage |
+|-----------|----------|
+| `test_smoke.py` | 7 tests — health, ingest, idempotency, validation, stubs |
+| `test_evidence_store.py` | 8 tests — save/load/delete frames & clips, daily subdirs |
+| `test_case_service.py` | 24 tests — list filters, status transitions, review workflow, challan eligibility |
+| `test_analytics.py` | 10 tests — group_by type/camera/hour, date filters, multiple group_by, invalid params |
 
 ---
 
@@ -163,10 +200,10 @@ once per session. The `conftest.py` sets `DATABASE_URL` to a fresh `./data/tv-te
 The day-by-day delivery plan, owners, decisions log, risks, and progress log live in
 [`plan.md`](plan.md). Headline:
 
-- **Day 1-2 (done)** contract + bootstrap + `/api/ingest`.
-- **Day 3-5** reviewer flow — list, detail, review.
-- **Day 5-7** challan, analytics, WS stream.
-- **Day 9-11** merge CV branch and run end-to-end.
+- **Day 1-2 (done)** contract + bootstrap + `/api/ingest` + `/api/analytics` + services + tests + Docker
+- **Day 3-5** reviewer flow — list, detail, review endpoints (using `case_service.py`)
+- **Day 5-7** challan, WS stream, hook WS broadcast into `/ingest`
+- **Day 9-11** merge CV branch and run end-to-end
 
 ---
 

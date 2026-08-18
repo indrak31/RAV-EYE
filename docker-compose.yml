@@ -1,0 +1,54 @@
+# docker-compose.yml — Traffic Violation backend with optional Postgres
+#
+# Usage:
+#   SQLite (default, no compose needed):
+#     uvicorn app.main:app --reload
+#
+#   Postgres via compose:
+#     docker compose --profile db up -d
+#     DATABASE_URL=postgresql+psycopg://tv:tv@localhost:5432/tv uvicorn app.main:app --reload
+#
+#   Full stack (API + Postgres):
+#     docker compose --profile db --profile api up -d
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: tv-postgres
+    profiles: ["db"]
+    environment:
+      POSTGRES_USER: tv
+      POSTGRES_PASSWORD: tv
+      POSTGRES_DB: tv
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tv -d tv"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tv-api
+    profiles: ["api"]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://tv:tv@postgres:5432/tv
+      - ENV=prod
+      - LOG_LEVEL=info
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./media:/app/media
+
+volumes:
+  postgres_data:

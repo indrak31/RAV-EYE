@@ -1,3 +1,6 @@
+# requirements-web.txt — Pinned dependencies for Traffic Violation backend
+# Install with: pip install -r requirements-web.txt
+
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 SQLAlchemy==2.0.36
