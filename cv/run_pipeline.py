@@ -6,9 +6,9 @@ Usage (once the STUB pieces below are implemented):
     python -m cv.run_pipeline --video data/videos/demo.mp4
 
 What this SHOULD end up doing, step by step:
-    1. Read frames from the video (video_reader.py — already works).
-    2. Run detection on each frame (detector.py — STUB).
-    3. Track objects across frames (tracker.py — STUB).
+    1. Read frames from the video (video_reader.py — DONE).
+    2. Run detection on each frame (detector.py — DONE, see --detect-only).
+    3. Track objects across frames (tracker.py — DONE, see --track-only).
     4. Check signal color if relevant (signal_state.py — STUB).
     5. Run rules to find violations (rule_engine.py — STUB rules).
     6. For each violation, build evidence (evidence_engine.py — STUB)
@@ -16,10 +16,8 @@ What this SHOULD end up doing, step by step:
     7. POST the packaged case to the backend's /api/ingest.
     8. Optionally write an annotated output video (annotator.py — works).
 
-Status today: this file wires the steps together and prints what WOULD
-happen, but does not yet call the STUB pieces (they'd just raise
-NotImplementedError). This is intentional — it lets us verify the wiring
-and CLI args work before real model code exists.
+Status: steps 1-3 are real and tested on actual footage. Steps 4-7 (rules,
+evidence, backend push) are next.
 """
 from __future__ import annotations
 
@@ -45,6 +43,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run real YOLO detection on the video (no tracking/rules yet — those are still stubs). "
         "First run downloads the yolov8n model (a few MB).",
+    )
+    parser.add_argument(
+        "--track-only",
+        action="store_true",
+        help="Run detection + tracking (ByteTrack) — each object gets a stable ID across frames. "
+        "No violation rules yet.",
     )
     parser.add_argument(
         "--limit-frames",
@@ -117,6 +121,66 @@ def run_detect_only(args) -> int:
     return 0
 
 
+def run_track_only(args) -> int:
+    """Real detection + tracking. Each TrackedObject carries a track_id that
+    stays the same across frames — this is what lets us count UNIQUE
+    vehicles instead of raw per-frame detections."""
+    from cv.pipeline.annotator import draw_tracked_objects
+    from cv.pipeline.tracker import Tracker
+
+    print("Loading YOLO + ByteTrack (first run downloads yolov8n.pt automatically)...")
+    tracker = Tracker(device="cuda")
+    try:
+        tracker.load()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Could not load on GPU ('cuda'): {exc}\nFalling back to CPU...")
+        tracker = Tracker(device="cpu")
+        tracker.load()
+
+    writer = None
+    if args.output:
+        import cv2
+
+        meta = get_video_meta(args.video)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(args.output, fourcc, meta.fps, (meta.width, meta.height))
+
+    # Track unique (class_name, track_id) pairs seen — this is how we get
+    # a real "N distinct vehicles" count instead of "N detections total".
+    unique_by_class: dict[str, set[int]] = {}
+    frame_total = 0
+    start = time.time()
+
+    for frame_number, frame in read_frames(args.video, resize_width=None):
+        if args.limit_frames is not None and frame_number >= args.limit_frames:
+            break
+
+        tracked_objects = tracker.update(frame)
+        for obj in tracked_objects:
+            unique_by_class.setdefault(obj.class_name, set()).add(obj.track_id)
+
+        if writer is not None:
+            writer.write(draw_tracked_objects(frame, tracked_objects))
+
+        frame_total += 1
+        if frame_total % 30 == 0:
+            print(f"  ...processed {frame_total} frames")
+
+    if writer is not None:
+        writer.release()
+
+    elapsed = time.time() - start
+    fps = frame_total / elapsed if elapsed > 0 else 0.0
+
+    print(f"\nProcessed {frame_total} frames in {elapsed:.1f}s ({fps:.1f} FPS).")
+    print("Unique objects tracked by class (this is the real count — same vehicle counted once):")
+    for class_name, ids in sorted(unique_by_class.items(), key=lambda kv: -len(kv[1])):
+        print(f"  {class_name}: {len(ids)}")
+    if args.output:
+        print(f"\nAnnotated video (with track IDs) written to: {args.output}")
+    return 0
+
+
 def main() -> int:
     args = parse_args()
 
@@ -131,11 +195,14 @@ def main() -> int:
     if args.detect_only:
         return run_detect_only(args)
 
+    if args.track_only:
+        return run_track_only(args)
+
     print(
-        "\nFull pipeline (tracking + rules + evidence + push to backend) is not wired yet.\n"
-        "What IS working: detection. Try:\n"
-        "  python -m cv.run_pipeline --video <path> --detect-only --limit-frames 60 --output out.mp4\n"
-        "Next to build: Tracker.load()/update() in cv/pipeline/tracker.py."
+        "\nFull pipeline (rules + evidence + push to backend) is not wired yet.\n"
+        "What IS working: detection AND tracking. Try:\n"
+        "  python -m cv.run_pipeline --video <path> --track-only --limit-frames 60 --output out.mp4\n"
+        "Next to build: rules/no_helmet_rule.py + rules/red_light_rule.py."
     )
     return 1
 

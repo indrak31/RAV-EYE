@@ -1,0 +1,27 @@
+# bytetrack_custom.yaml — NOT currently used by default (see tracker.py,
+# which defaults to bundled "botsort.yaml" instead — it measured better).
+#
+# Kept here as a documented experiment, not deleted, so nobody re-does this
+# same work: on a real dense-traffic clip, this config (vs. ultralytics'
+# stock bytetrack.yaml) made basically no measurable difference to ID
+# switching (88 vs 89 "unique" vehicles counted on the same 10s clip —
+# within noise). The theory (below) was reasonable; it just didn't pan out
+# for THIS specific problem (low-resolution, blocky, dense footage).
+# Worth revisiting if a future clip is higher-resolution/less compressed.
+#
+# What was changed from ultralytics' defaults, and the (unconfirmed) theory:
+#   track_low_thresh: 0.1 -> 0.05   — accept weaker/blurrier detections as
+#     "probably the same vehicle, just harder to see" instead of dropping
+#     them and starting a new ID.
+#   new_track_thresh: 0.25 -> 0.3   — require a bit more confidence before
+#     deciding something is a genuinely NEW vehicle.
+#   track_buffer: 30 -> 60          — wait twice as long (~2s at 30fps)
+#     before giving up on a briefly-occluded vehicle.
+
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.05
+new_track_thresh: 0.3
+track_buffer: 60
+match_thresh: 0.8
+fuse_score: True

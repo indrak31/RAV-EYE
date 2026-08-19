@@ -8,14 +8,25 @@ every frame, and we could never say "this vehicle ran the red light" as
 ONE continuous event. ByteTrack solves that by matching boxes across
 frames and assigning a persistent track_id.
 
-Status: STUB. update() is not implemented yet.
+Status: IMPLEMENTED (first real version).
+
+IMPORTANT design note — this deviates slightly from the original stub:
+The original plan was Tracker.update(detections) — feed in detections
+already produced by detector.py. But `ultralytics`'s built-in ByteTrack
+does detection AND tracking together in a single call (model.track(frame)),
+not "track these detections I already computed." Splitting them apart
+would mean reimplementing frame-to-frame box matching ourselves for no
+real benefit. So: Tracker wraps its OWN YOLO model (same weights as
+detector.py) and Tracker.update() takes a raw `frame`, not a detections
+list. detector.py is still useful on its own for one-off/no-tracking
+checks (--detect-only mode); the real pipeline will use Tracker directly.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List
 
-from cv.pipeline.detector import Detection
+from cv.pipeline.detector import RELEVANT_CLASSES
 
 
 @dataclass
@@ -27,26 +38,91 @@ class TrackedObject:
 
 
 class Tracker:
-    """Wraps a ByteTrack (or BoT-SORT fallback) tracker."""
+    """Wraps ultralytics' built-in ByteTrack. One instance, reused across
+    all frames of a video (tracking needs memory of previous frames)."""
 
-    def __init__(self, track_thresh: float = 0.5):
-        self.track_thresh = track_thresh
-        self._impl = None  # loaded lazily
+    def __init__(
+        self,
+        model_path: str = "yolov8n.pt",
+        device: str = "cuda",
+        conf_threshold: float = 0.4,
+        tracker_config: str = "botsort.yaml",
+        imgsz: int = 640,
+    ):
+        self.model_path = model_path
+        self.device = device
+        self.conf_threshold = conf_threshold
+        # "botsort.yaml" is bundled with ultralytics (no download needed).
+        # Measured on a real dense-traffic clip: BoT-SORT gave ~8% fewer
+        # ID switches than default ByteTrack (82 vs 89 "unique" vehicles
+        # on a 10s clip that visually has ~20-25 real ones). A real but
+        # modest improvement — dense/low-res traffic footage remains a
+        # known hard case (flagged as a risk in the original plan), not
+        # something this one config switch fully solves.
+        #
+        # Tried and REJECTED after measuring (kept here so nobody re-tries
+        # the same dead ends): raising imgsz to 960 made switching WORSE
+        # (128 unique vehicles) — upscaling this already low-res, blocky
+        # video just adds blurry noise, not real detail. Lowering
+        # conf_threshold to 0.25 also made it worse for the same reason:
+        # more noisy low-confidence detections flicker in and out, creating
+        # more short-lived tracks, not fewer.
+        self.tracker_config = tracker_config
+        self.imgsz = imgsz
+        self._model = None
 
     def load(self) -> None:
-        """TODO(Meghana):
-            from boxmot import ByteTrack
-            self._impl = ByteTrack(track_thresh=self.track_thresh)
-        If ByteTrack loses IDs in dense traffic, switch to BoT-SORT and/or
-        lower track_thresh (this was flagged as a known risk).
-        """
-        raise NotImplementedError("tracker.load() — plug in boxmot ByteTrack here")
+        from ultralytics import YOLO
 
-    def update(self, detections: List[Detection]) -> List[TrackedObject]:
-        """Feed this frame's detections in, get back the same objects with
-        a track_id attached (matched against previous frames).
+        self._model = YOLO(self.model_path)
+        self._model.to(self.device)
 
-        TODO(Meghana): convert Detection list -> tracker input format,
-        call self._impl.update(...), convert results back to TrackedObject.
+    def update(self, frame) -> List[TrackedObject]:
+        """Run detection + tracking on one frame. `persist=True` tells
+        ultralytics "remember what you saw in previous frames from this
+        same model instance" — without it, every frame would restart
+        tracking from zero, defeating the whole point.
         """
-        raise NotImplementedError("tracker.update() — plug in real tracking here")
+        if self._model is None:
+            raise RuntimeError("Tracker.load() must be called before update()")
+
+        results = self._model.track(
+            frame,
+            persist=True,
+            tracker=self.tracker_config,
+            imgsz=self.imgsz,
+            conf=self.conf_threshold,
+            verbose=False,
+        )[0]
+
+        tracked: List[TrackedObject] = []
+        if results.boxes is None or results.boxes.id is None:
+            # No tracks yet (can happen on the very first frame or a frame
+            # with nothing detected) — return empty, not an error.
+            return tracked
+
+        for box in results.boxes:
+            class_id = int(box.cls[0])
+            class_name = self._model.names[class_id]
+            confidence = float(box.conf[0])
+
+            if class_name not in RELEVANT_CLASSES:
+                continue
+            if confidence < self.conf_threshold:
+                continue
+            if box.id is None:
+                continue  # this particular box wasn't assigned a track yet
+
+            track_id = int(box.id[0])
+            x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+
+            tracked.append(
+                TrackedObject(
+                    track_id=track_id,
+                    class_name=class_name,
+                    confidence=confidence,
+                    box_xyxy=(x1, y1, x2, y2),
+                )
+            )
+
+        return tracked

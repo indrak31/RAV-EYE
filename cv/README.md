@@ -21,25 +21,33 @@ an Nvidia GPU (Asus TUF); Aryan has a MacBook (CPU only). So:
 
 | File | Status |
 |---|---|
-| `pipeline/video_reader.py` | Real — reads video frames, just needs `opencv-python` installed |
-| `pipeline/annotator.py` | Real — draws boxes, no model needed |
+| `pipeline/video_reader.py` | Real — reads video frames |
+| `pipeline/detector.py` | Real — YOLOv8n detection, tested on real footage (`--detect-only`) |
+| `pipeline/tracker.py` | Real — YOLOv8n + BoT-SORT tracking, tested on real footage (`--track-only`). **Known limitation:** dense/low-resolution traffic still causes ID switches (measured, not just suspected — see comments in the file); flagged as a risk in the original plan, not yet fully solved. |
+| `pipeline/annotator.py` | Real — draws boxes + per-track-id colors |
 | `pipeline/association.py` (`iou`) | Real — has a passing test |
 | `evidence/case_builder.py` | Real shape, matches `docs/api-contract.md` exactly |
-| `run_pipeline.py` | Wiring works with `--dry-run`; full run needs the stubs below filled in |
-| `pipeline/detector.py`, `tracker.py`, `signal_state.py` | Stub — needs real model code |
-| `pipeline/plate_detector.py`, `ocr_engine.py` | Stub — needs real model code |
+| `run_pipeline.py` | `--dry-run`, `--detect-only`, `--track-only` all work on real video |
+| `pipeline/signal_state.py` | Stub — needs real logic |
+| `pipeline/plate_detector.py`, `ocr_engine.py` | Stub — Aryan's, needs real model code |
 | `rules/no_helmet_rule.py`, `red_light_rule.py` | Stub — needs classifier/signal state first |
 | `evidence/evidence_engine.py` | Stub — needs frame-saving + ffmpeg clip logic |
 
-## Try it today (no models needed yet)
+## Try it today
 
 ```bash
-pip install -r requirements-cv.txt
-python -m cv.run_pipeline --video path/to/any/clip.mp4 --dry-run
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-cv.txt
+# CUDA-enabled PyTorch (the plain pip install grabs a CPU-only build by default):
+.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+.venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --dry-run
+.venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --detect-only --output out.mp4
+.venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --track-only --output out.mp4
 ```
 
-That should print the video's fps/resolution/frame count — confirms the
-plumbing works before any AI code is written.
+Needs Python 3.11 or 3.12 specifically — newer Python versions (e.g. 3.14)
+don't yet have prebuilt installers for these ML libraries.
 
 ## Run the one test that exists so far
 
