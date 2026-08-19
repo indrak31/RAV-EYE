@@ -60,6 +60,7 @@ def case_to_out(case: Case) -> CaseOut:
         reviewed_at=case.occurrence_reviewed_at,
         review_decision=_safe_review_decision(case.review_decision),
         reviewer_id=case.reviewer_id,
+        review_note=case.review_note,
         evidence=[_evidence_item_to_out(e) for e in (case.evidence or [])],
     )
 

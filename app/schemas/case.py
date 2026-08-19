@@ -95,6 +95,7 @@ class CaseOut(BaseModel):
     reviewed_at: datetime | None = None
     review_decision: ReviewDecision | None = None
     reviewer_id: str | None = None
+    review_note: str | None = None
     evidence: list[EvidenceItemOut] = Field(default_factory=list)
 
 

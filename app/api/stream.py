@@ -1,23 +1,71 @@
 """WS /api/stream — real-time dashboard stream.
 
-Day 1: stubbed — accepts the connection, sends a `hello` event, then closes
-with code 1011 carrying a `not_implemented` event.
-Planned: D5-7 — see docs/api-contract.md section 7.
+Day 5-7: implemented with in-process pub/sub via EventBus.
+Event types: case.ingested, case.reviewed, challan.issued, heartbeat (every 30s).
 """
 from __future__ import annotations
 
-import json
+import asyncio
+import os
+import queue
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from app.services.event_bus import event_bus
 
 router = APIRouter(prefix="/api", tags=["stream"])
+
+# Heartbeat interval - can be overridden via env for testing
+HEARTBEAT_INTERVAL = int(os.getenv("WS_HEARTBEAT_INTERVAL", "30"))
 
 
 @router.websocket("/stream")
 async def stream(ws: WebSocket) -> None:
     await ws.accept()
-    await ws.send_text(
-        json.dumps({"event": "hello", "planned_day": "D5-7", "detail": "not_implemented"})
-    )
-    await ws.send_text(json.dumps({"event": "not_implemented", "planned_day": "D5-7"}))
-    await ws.close(code=1011, reason="not implemented until D5-7")
+
+    # Subscribe to event bus
+    q = await event_bus.subscribe()
+
+    # Send hello event
+    hello_event = event_bus._build_hello_event()
+    await ws.send_text(hello_event.to_json())
+
+    # Helper to send heartbeat
+    async def send_heartbeat():
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            try:
+                await ws.send_text('{"event": "heartbeat"}')
+            except Exception:
+                break
+
+    heartbeat_task = asyncio.create_task(send_heartbeat())
+
+    try:
+        # Listen for events from queue and forward to WebSocket
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, q.get),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                continue
+            except queue.Empty:
+                continue
+
+            try:
+                await ws.send_text(event.to_json())
+            except Exception:
+                break
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        heartbeat_task.cancel()
+        await event_bus.unsubscribe(q)
+        try:
+            await ws.close()
+        except Exception:
+            pass

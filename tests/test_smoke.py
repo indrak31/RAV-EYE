@@ -137,12 +137,11 @@ def test_ingest_requires_evidence(client):
 
 
 def test_stubs_return_501(client):
-    assert client.get("/api/cases").status_code == 501
-    assert client.get("/api/cases/abc").status_code == 501
-    assert client.patch("/api/cases/abc/review", json={"decision": "approved"}).status_code == 501
-    assert client.post("/api/challan", json={"case_id": "abc"}).status_code == 501
-    # analytics is now implemented (Day 5-7)
-    assert client.get("/api/analytics").status_code == 200
+    # Only stream remains as stub (Day 5-7)
+    # cases, review, challan, analytics are now implemented
+    with client.websocket_connect("/api/stream") as ws:
+        msg1 = ws.receive_json()
+        assert msg1.get("event") == "hello"
 
 
 def test_stream_stub_sends_hello_then_closes_1011(client):

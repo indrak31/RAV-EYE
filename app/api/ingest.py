@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.case import IngestRequest, IngestResponse
+from app.services.event_bus import case_ingested_event, event_bus
 from app.services.ingest import ingest
 
 router = APIRouter(prefix="/api", tags=["ingest"])
@@ -25,6 +26,16 @@ def ingest_case(
     if replayed:
         # Idempotent replay -> 200 with `replayed: true` per api-contract.md.
         response.status_code = status.HTTP_200_OK
+
+    # Broadcast case.ingested event (only on new cases, not replays)
+    if not replayed:
+        event_bus.broadcast_sync("case.ingested", **case_ingested_event(
+            case_id=case.case_id,
+            violation_type=case.violation_type.value,
+            camera_id=case.camera_id,
+            occurred_at=case.occurrence_occurred_at.isoformat(),
+        ))
+
     return IngestResponse(
         case_id=case.case_id,
         status=case.status,
