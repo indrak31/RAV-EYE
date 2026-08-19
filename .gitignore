@@ -19,6 +19,12 @@ data/
 # Media storage (evidence frames/clips)
 media/
 
+# CV: downloaded model weights + local test outputs (regenerate, don't commit)
+*.pt
+*.onnx
+out*.mp4
+cv/models/
+
 # Test / lint
 .pytest_cache/
 .mypy_cache/

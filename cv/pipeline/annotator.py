@@ -9,12 +9,28 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from cv.pipeline.detector import Detection
 from cv.pipeline.tracker import TrackedObject
 
 try:
     import cv2
 except ImportError:  # pragma: no cover
     cv2 = None
+
+
+def draw_detections(frame, detections: Iterable[Detection]):
+    """Same idea as draw_tracked_objects, but for raw Detections (no track_id
+    yet — useful for testing detector.py on its own, before tracker.py exists)."""
+    if cv2 is None:
+        raise RuntimeError("opencv-python is not installed yet.")
+
+    out = frame.copy()
+    for det in detections:
+        x1, y1, x2, y2 = (int(v) for v in det.box_xyxy)
+        cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        label = f"{det.class_name} ({det.confidence:.2f})"
+        cv2.putText(out, label, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    return out
 
 
 def draw_tracked_objects(frame, objects: Iterable[TrackedObject]):
