@@ -1,0 +1,19 @@
+# default.yaml — settings the pipeline reads at startup.
+# Owner: Meghana. Edit these instead of hardcoding numbers in code.
+
+model:
+  detector_path: models/yolov8n.pt
+  device: cuda          # "cuda" on the TUF, "cpu" as a fallback
+  image_size: 640        # per hardware plan: 640px, batch<=8 for fine-tune, batch=1 for inference
+
+tracker:
+  track_thresh: 0.5
+
+# Per-camera overrides can live in cameras.yaml later (not created yet —
+# only one demo camera for now, so this file's defaults are enough).
+camera:
+  camera_id: CAM-DEMO-01
+  stop_line: null        # TODO(Meghana): fill in [x1,y1,x2,y2] once we calibrate on the demo clip
+
+evidence:
+  output_dir: media/evidence

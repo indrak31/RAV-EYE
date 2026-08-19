@@ -1,0 +1,7 @@
+ultralytics
+opencv-python
+numpy
+paddleocr
+pyyaml
+boxmot
+pytest
