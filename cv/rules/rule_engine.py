@@ -7,8 +7,9 @@ at the current tracked objects and either does nothing, or returns a
 Violation. Adding a new violation type later (triple-riding, wrong-side)
 means writing one new rule file, not touching this engine.
 
-Status: STUB — rule dispatch works, but no rules are implemented yet
-(see no_helmet_rule.py, red_light_rule.py).
+Status: dispatch engine works. red_light_rule.py is implemented (logic
+tested, stop-line NOT yet calibrated on a real camera — see that file).
+no_helmet_rule.py is still a stub (needs a helmet classifier first).
 """
 from __future__ import annotations
 
