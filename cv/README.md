@@ -28,7 +28,7 @@ an Nvidia GPU (Asus TUF); Aryan has a MacBook (CPU only). So:
 | `pipeline/association.py` (`iou`) | Real — has a passing test |
 | `evidence/case_builder.py` | Real shape, matches `docs/api-contract.md` exactly |
 | `run_pipeline.py` | `--dry-run`, `--detect-only`, `--track-only` all work on real video |
-| `pipeline/signal_state.py` | Stub — needs real logic |
+| `pipeline/signal_state.py` | Real — HSV heuristic (top/mid/bottom band = red/yellow/green), verified with synthetic-image tests. **Not yet validated on a real traffic light** — none was detectable in our test clip (too small/distant), so this still needs a real-footage check before trusting it fully. |
 | `pipeline/plate_detector.py`, `ocr_engine.py` | Stub — Aryan's, needs real model code |
 | `rules/no_helmet_rule.py`, `red_light_rule.py` | Stub — needs classifier/signal state first |
 | `evidence/evidence_engine.py` | Stub — needs frame-saving + ffmpeg clip logic |
