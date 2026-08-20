@@ -191,6 +191,39 @@ def run_track_only(args) -> int:
     return 0
 
 
+def evaluate_frame_for_red_light(tracked_objects, frame, frame_number, red_light_rule, signal_lookup=None):
+    """The 'glue' logic for one frame: find a traffic light among what was
+    tracked, read its color, hand everything to the rule, return what
+    happened. Pulled out of run_violations() so it can be tested directly
+    with FAKE tracked_objects/signal readings — no real video, GPU, or
+    model needed to verify this wiring is correct.
+
+    signal_lookup(frame, box_xyxy) -> (SignalColor, confidence). Defaults
+    to the real classify_signal_crop; tests inject a fake one instead.
+
+    Returns (violation_or_none, signal_color, signal_confidence).
+    """
+    from cv.pipeline.signal_state import SignalColor, classify_signal_crop
+
+    if signal_lookup is None:
+        signal_lookup = classify_signal_crop
+
+    signal_color = SignalColor.UNKNOWN
+    signal_confidence = 0.0
+    for obj in tracked_objects:
+        if obj.class_name == "traffic light":
+            signal_color, signal_confidence = signal_lookup(frame, obj.box_xyxy)
+            break
+
+    frame_context = {
+        "signal_color": signal_color,
+        "signal_confidence": signal_confidence,
+        "frame_number": frame_number,
+    }
+    violation = red_light_rule(tracked_objects, frame_context)
+    return violation, signal_color, signal_confidence
+
+
 def run_violations(args) -> int:
     """The real target: detect + track + read the signal + check the
     calibrated stop line, and report any red-light violations found."""
@@ -198,7 +231,6 @@ def run_violations(args) -> int:
 
     from cv.pipeline.annotator import draw_tracked_objects
     from cv.pipeline.config import load_config, stop_line_from_config
-    from cv.pipeline.signal_state import SignalColor, classify_signal_crop
     from cv.pipeline.tracker import Tracker
     from cv.rules.red_light_rule import RedLightRule
 
@@ -239,23 +271,9 @@ def run_violations(args) -> int:
 
         tracked_objects = tracker.update(frame)
 
-        # Find a traffic light among what we tracked this frame, if any,
-        # and read its color. Real footage may simply not show one every
-        # frame (or at all, depending on camera angle) — that's fine, the
-        # rule just stays silent (signal UNKNOWN) when we can't tell.
-        signal_color = SignalColor.UNKNOWN
-        signal_confidence = 0.0
-        for obj in tracked_objects:
-            if obj.class_name == "traffic light":
-                signal_color, signal_confidence = classify_signal_crop(frame, obj.box_xyxy)
-                break
-
-        frame_context = {
-            "signal_color": signal_color,
-            "signal_confidence": signal_confidence,
-            "frame_number": frame_number,
-        }
-        violation = red_light_rule(tracked_objects, frame_context)
+        violation, signal_color, signal_confidence = evaluate_frame_for_red_light(
+            tracked_objects, frame, frame_number, red_light_rule
+        )
         if violation is not None:
             violations_found.append(violation)
             print(f"  !! VIOLATION at frame {frame_number}: {violation}")
