@@ -231,7 +231,9 @@ def run_violations(args) -> int:
 
     from cv.pipeline.annotator import draw_tracked_objects
     from cv.pipeline.config import load_config, stop_line_from_config
+    from cv.pipeline.helmet_classifier import HelmetClassifier
     from cv.pipeline.tracker import Tracker
+    from cv.rules.no_helmet_rule import NoHelmetRule
     from cv.rules.red_light_rule import RedLightRule
 
     config = load_config(args.config)
@@ -239,7 +241,7 @@ def run_violations(args) -> int:
     if stop_line is None:
         print(
             "No calibrated stop line in configs/default.yaml (camera.stop_line is null).\n"
-            "The rule will run but can never fire. See cv/rules/red_light_rule.py for how to calibrate."
+            "The red-light rule will run but can never fire. See cv/rules/red_light_rule.py for how to calibrate."
         )
     else:
         print(f"Using calibrated stop line: {stop_line}")
@@ -253,7 +255,16 @@ def run_violations(args) -> int:
         tracker = Tracker(device="cpu")
         tracker.load()
 
+    helmet_classifier = None
+    try:
+        print("Loading helmet classifier (large model — may take a moment)...")
+        helmet_classifier = HelmetClassifier(device="cuda")
+        helmet_classifier.load()
+    except FileNotFoundError as exc:
+        print(f"Helmet model not available, skipping no_helmet checks this run: {exc}")
+
     red_light_rule = RedLightRule(stop_line=stop_line)
+    no_helmet_rule = NoHelmetRule()
 
     writer = None
     if args.output:
@@ -277,6 +288,13 @@ def run_violations(args) -> int:
         if violation is not None:
             violations_found.append(violation)
             print(f"  !! VIOLATION at frame {frame_number}: {violation}")
+
+        if helmet_classifier is not None:
+            helmet_detections = helmet_classifier.detect(frame)
+            helmet_violation = no_helmet_rule(tracked_objects, {"helmet_detections": helmet_detections})
+            if helmet_violation is not None:
+                violations_found.append(helmet_violation)
+                print(f"  !! VIOLATION at frame {frame_number}: {helmet_violation}")
 
         if writer is not None:
             annotated = draw_tracked_objects(frame, tracked_objects)

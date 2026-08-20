@@ -32,8 +32,25 @@ an Nvidia GPU (Asus TUF); Aryan has a MacBook (CPU only). So:
 | `pipeline/signal_state.py` | Real — HSV heuristic (top/mid/bottom band = red/yellow/green), verified with synthetic-image tests. **Not yet validated on a real traffic light** — none was detectable in our test clip (too small/distant), so this still needs a real-footage check before trusting it fully. |
 | `pipeline/plate_detector.py`, `ocr_engine.py` | Stub — Aryan's, needs real model code |
 | `rules/red_light_rule.py` | Real logic + **calibrated** for `videoplayback (1).mp4` (Kolkata intersection clip) — stop line measured and confirmed visually, saved in `configs/default.yaml`. Ran end-to-end via `--violations` with no errors. **Not yet confirmed to correctly DETECT a real violation** — the calibration clip shows queued/stationary traffic, not an actual red-light run, so 0 violations found is the expected correct answer for that clip, not proof the detection itself works on a real violation. Needs footage of an actual red-light-jump to fully confirm. |
-| `rules/no_helmet_rule.py` | Stub — needs a helmet classifier first |
+| `pipeline/helmet_classifier.py` | Real — wraps a pretrained third-party model (see Model Files below). **Tested on real footage, and it's not great as-is**: produced false-positive boxes on non-people (a billboard, a car roof) at low confidence. `no_helmet_rule.py` is built specifically to survive this, not trust it blindly. |
+| `rules/no_helmet_rule.py` | Real logic: only counts a "without_helmet" detection if it's close to an actual tracked motorcycle (rejects the false positives above by construction) AND persists for 3+ consecutive frames (rejects one-off flicker). 6 passing tests, including one modeled directly on the false positive we saw. Ran end-to-end via `--violations` with no errors; 0 violations on the calibration clip (plausible, not yet proven correct on a real violation — same honest caveat as the red-light rule). |
 | `evidence/evidence_engine.py` | Stub — needs frame-saving + ffmpeg clip logic |
+
+## Model files (not in git — download separately)
+
+`cv/models/` is gitignored (large binaries don't belong in git). To run
+`--violations` with helmet detection working, download:
+
+- **Helmet classifier**: [`Weights/best.pt`](https://raw.githubusercontent.com/Juliowiwiwiwi/Bike-Helmet-Detction-Model/master/Weights/best.pt)
+  from [Juliowiwiwiwi/Bike-Helmet-Detction-Model](https://github.com/Juliowiwiwiwi/Bike-Helmet-Detction-Model)
+  (~83.6 MB, third-party, no stated license — fine for hackathon/internal
+  use). Save as `cv/models/helmet_best.pt`.
+
+Without it, `--violations` still works — it just skips the no_helmet
+checks and prints a message saying so (see `run_pipeline.py`).
+
+That same repo also has a `license_plate_detector.pt` (~50 MB) — Aryan may
+want it for `plate_detector.py`, not downloaded/used here.
 
 ## Try it today
 

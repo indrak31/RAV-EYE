@@ -7,9 +7,10 @@ at the current tracked objects and either does nothing, or returns a
 Violation. Adding a new violation type later (triple-riding, wrong-side)
 means writing one new rule file, not touching this engine.
 
-Status: dispatch engine works. red_light_rule.py is implemented (logic
-tested, stop-line NOT yet calibrated on a real camera — see that file).
-no_helmet_rule.py is still a stub (needs a helmet classifier first).
+Status: dispatch engine works. Both rules implemented:
+red_light_rule.py (logic tested, stop line calibrated on a real clip) and
+no_helmet_rule.py (logic tested, uses a pretrained classifier with known
+real-world accuracy caveats — see helmet_classifier.py).
 """
 from __future__ import annotations
 
