@@ -4,9 +4,7 @@ A FastAPI service that ingests traffic-violation detections from a computer-visi
 reviewers approve or reject each case, generates challan mocks, exposes analytics for the
 dashboard, and broadcasts live case events over WebSocket.
 
-**Status:** Day 1-2 — `POST /api/ingest` fully working; `GET /api/analytics` implemented;
-`GET /api/cases`, `GET /api/cases/{id}`, `PATCH /api/cases/{id}/review` stubbed to `501` (planned D3-5);
-`POST /api/challan` and `WS /api/stream` stubbed to `501`/`1011` (planned D5-7).
+**Status:** Day 1-7 — All 8 endpoints implemented (Day 1-7 complete).
 
 ---
 
@@ -17,7 +15,7 @@ dashboard, and broadcasts live case events over WebSocket.
 - **Zero infra:** no auth, no microservices, no message queue. Suitable for a hackathon.
 - **Contract-first:** `docs/api-contract.md` is the source of truth; every PR that changes an
   endpoint shape edits the contract in the same PR.
-- **Tested:** 49 tests passing (smoke + evidence store + case service + analytics).
+- **Tested:** 72 tests passing (smoke + evidence store + case service + analytics + cases endpoints + challan).
 
 ---
 
@@ -26,12 +24,12 @@ dashboard, and broadcasts live case events over WebSocket.
 | #  | Method   | Path                          | Status        | Planned (Day) |
 |----|----------|-------------------------------|---------------|---------------|
 | 1  | `POST`   | `/api/ingest`                 | 201 / 200     | D1-2 (done)   |
-| 2  | `GET`    | `/api/cases`                  | 501           | D3-5          |
-| 3  | `GET`    | `/api/cases/{case_id}`        | 501           | D3-5          |
-| 4  | `PATCH`  | `/api/cases/{case_id}/review` | 501           | D3-5          |
-| 5  | `POST`   | `/api/challan`                | 501           | D5-7          |
+| 2  | `GET`    | `/api/cases`                  | **200**       | D3-5 (done)   |
+| 3  | `GET`    | `/api/cases/{case_id}`        | **200**       | D3-5 (done)   |
+| 4  | `PATCH`  | `/api/cases/{case_id}/review` | **200**       | D3-5 (done)   |
+| 5  | `POST`   | `/api/challan`                | **202**       | D5-7 (done)   |
 | 6  | `GET`    | `/api/analytics`              | **200**       | D5-7 (done)   |
-| 7  | `WS`     | `/api/stream`                 | 1011 (stub)   | D5-7          |
+| 7  | `WS`     | `/api/stream`                 | **101**       | D5-7 (done)   |
 | 8  | `GET`    | `/health`                     | 200           | D1 (done)     |
 
 Full request/response shapes, enums, and WS events: see [`docs/api-contract.md`](docs/api-contract.md).
@@ -49,7 +47,7 @@ pip install -r requirements.txt
 Copy-Item .env.example .env             # default: SQLite at ./data/tv.db
 
 uvicorn app.main:app --reload          # http://127.0.0.1:8000/docs
-pytest -q                               # 49 passed
+pytest -q                               # 72 passed
 ```
 
 ### End-to-end smoke from PowerShell
@@ -73,8 +71,22 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/api/ingest -Method POST `
 
 Invoke-WebRequest -Uri http://127.0.0.1:8000/health   # -> {"db":"ok", "status":"ok", ...}
 
-# Analytics (now implemented)
+# Analytics (implemented)
 Invoke-WebRequest -Uri http://127.0.0.1:8000/api/analytics?group_by=type
+
+# List cases (implemented)
+Invoke-WebRequest -Uri http://127.0.0.1:8000/api/cases
+
+# Review a case (implemented)
+$review = @'{"decision":"approved","reviewer_id":"REV-001"}'@
+Invoke-WebRequest -Uri http://127.0.0.1:8000/api/cases/{case_id}/review -Method PATCH -ContentType application/json -Body $review
+
+# Issue challan (implemented)
+$challan = @'{"case_id":"{case_id}","channel":"sms"}'@
+Invoke-WebRequest -Uri http://127.0.0.1:8000/api/challan -Method POST -ContentType application/json -Body $challan
+
+# WebSocket stream (implemented)
+# Connect to ws://127.0.0.1:8000/api/stream
 ```
 
 ### With Docker (Postgres)
@@ -86,6 +98,9 @@ docker compose --profile db up -d
 # Run API against Postgres
 $env:DATABASE_URL="postgresql+psycopg://tv:tv@localhost:5432/tv"
 uvicorn app.main:app --reload
+
+# Full stack (API + Postgres in containers)
+docker compose --profile db --profile api up -d
 ```
 
 ---
@@ -101,10 +116,11 @@ app/
 |   +-- health.py  ingest.py  cases.py  challan.py  analytics.py  stream.py  stub.py
 +-- models/                 Case, EvidenceItem, Vehicle, Officer (SQLAlchemy ORM)
 +-- schemas/                enums + Pydantic request/response models
-+-- services/               Business logic (Ingra owns routes, Alok owns services)
++-- services/               Business logic (Indra owns routes, Alok owns services)
 |   +-- ingest.py           Persist Case + cascades; idempotency on client_request_id
 |   +-- evidence_store.py   Disk-backed media storage (frames/clips under media/{date}/)
 |   +-- case_service.py     Status transitions, list filters, review workflow
+|   +-- event_bus.py        In-process pub/sub for WebSocket broadcasting
 |   +-- serialization.py    ORM -> Pydantic projectors
 docs/
 +-- api-contract.md         v1 contract — edit FIRST; code follows
@@ -113,6 +129,9 @@ tests/                      pytest; conftest pins a fresh SQLite DB
 +-- test_evidence_store.py  Media storage round-trip
 +-- test_case_service.py    Status transitions, list filters, review workflow
 +-- test_analytics.py       Group-by queries, date filters
++-- test_cases_endpoints.py Cases list/detail/review endpoints
++-- test_challan.py         Challan generation & eligibility
++-- test_stream.py          WebSocket event broadcasting (skipped: pytest-asyncio issue)
 readme.md  plan.md  skill.md  requirements.txt  .env.example  docker-compose.yml  Dockerfile
 ```
 
@@ -168,18 +187,21 @@ Key enumerations (see `app/schemas/enums.py`):
 | `evidence_store.py` | `save_frame(bytes) -> evidence_id`, `save_clip(path) -> evidence_id`, `get_media(evidence_id) -> FileResponse`. Files stored under `media/{YYYY-MM-DD}/{uuid}.ext`. |
 | `case_service.py` | `list_cases(filters, pagination)`, `review_case(case_id, decision)`, `transition_to_in_review()`, `is_challan_eligible()`, `mark_challan_issued()`. |
 | `analytics.py` (endpoint) | Real SQLAlchemy `GROUP BY` on `violation_type`, `camera_id`, `hour(occurred_at)` with `from`/`to` date filters. |
+| `event_bus.py` | In-process pub/sub: `subscribe()`, `unsubscribe()`, `broadcast_sync()` for sync endpoints, `broadcast()` for async. |
 
 ---
 
 ## Testing
 
 ```bash
-pytest                 # all 49 tests
+pytest                 # all 72 tests
 pytest -q              # quiet
 pytest tests/test_smoke.py::test_health   # single test
 pytest tests/test_analytics.py            # analytics tests
 pytest tests/test_case_service.py         # case service tests
 pytest tests/test_evidence_store.py       # evidence store tests
+pytest tests/test_cases_endpoints.py      # cases endpoints
+pytest tests/test_challan.py              # challan endpoints
 ```
 
 Tests use FastAPI's `TestClient` with the lifespan enabled, so `create_all()` runs on the test DB
@@ -188,10 +210,13 @@ once per session. The `conftest.py` sets `DATABASE_URL` to a fresh `./data/tv-te
 
 | Test file | Coverage |
 |-----------|----------|
-| `test_smoke.py` | 7 tests — health, ingest, idempotency, validation, stubs |
+| `test_smoke.py` | 7 tests — health, ingest, idempotency, validation |
 | `test_evidence_store.py` | 8 tests — save/load/delete frames & clips, daily subdirs |
 | `test_case_service.py` | 24 tests — list filters, status transitions, review workflow, challan eligibility |
 | `test_analytics.py` | 10 tests — group_by type/camera/hour, date filters, multiple group_by, invalid params |
+| `test_cases_endpoints.py` | 15 tests — list/detail/review endpoints, filters, pagination, 404/409 errors |
+| `test_challan.py` | 6 tests — challan creation, eligibility checks, channels |
+| `test_stream.py` | 5 tests (skipped — pytest-asyncio event loop cleanup issue; WS verified manually) |
 
 ---
 
@@ -201,8 +226,8 @@ The day-by-day delivery plan, owners, decisions log, risks, and progress log liv
 [`plan.md`](plan.md). Headline:
 
 - **Day 1-2 (done)** contract + bootstrap + `/api/ingest` + `/api/analytics` + services + tests + Docker
-- **Day 3-5** reviewer flow — list, detail, review endpoints (using `case_service.py`)
-- **Day 5-7** challan, WS stream, hook WS broadcast into `/ingest`
+- **Day 3-5 (done)** reviewer flow — list, detail, review endpoints (using `case_service.py`)
+- **Day 5-7 (done)** challan, WS stream, hook WS broadcast into `/ingest`, `/review`, `/challan`
 - **Day 9-11** merge CV branch and run end-to-end
 
 ---

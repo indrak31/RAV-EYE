@@ -51,6 +51,7 @@ Traffic Violation/
 |       +-- ingest.py          # Persist Case + cascades; idempotency.
 |       +-- evidence_store.py  # Disk-backed media storage (frames/clips).
 |       +-- case_service.py    # Status transitions, list filters, review workflow.
+|       +-- event_bus.py       # In-process pub/sub for WebSocket broadcasting.
 |       +-- serialization.py   # ORM -> Pydantic projectors.
 +-- tests/
 |   +-- conftest.py            # Sets DATABASE_URL to a fresh SQLite before app import.
@@ -58,6 +59,9 @@ Traffic Violation/
 |   +-- test_evidence_store.py # Media storage round-trip.
 |   +-- test_case_service.py   # Status transitions, list filters, review workflow.
 |   +-- test_analytics.py      # Group-by queries, date filters.
+|   +-- test_cases_endpoints.py # Cases list/detail/review endpoints.
+|   +-- test_challan.py        # Challan generation & eligibility.
+|   +-- test_stream.py         # WebSocket event broadcasting (skipped: pytest-asyncio issue).
 +-- requirements.txt           # Pinned deps (install with `pip install -r requirements.txt`)
 +-- .env.example
 +-- .gitignore
@@ -105,7 +109,7 @@ docker compose --profile db up -d
 $env:DATABASE_URL="postgresql+psycopg://tv:tv@localhost:5432/tv"
 uvicorn app.main:app --reload
 
-# Or run full stack (API + Postgres)
+# Or run full stack (API + Postgres in containers)
 docker compose --profile db --profile api up -d
 ```
 
@@ -205,6 +209,14 @@ That's it. `app/db.py` already adjusts `connect_args` based on the URL scheme. `
 4. Import and call from the corresponding `app/api/<endpoint>.py` route.
 5. Add tests in `tests/test_<name>.py` — test the service directly AND the endpoint via `TestClient`.
 
+### 6.5 WebSocket broadcasting (EventBus pattern)
+
+1. Import `event_bus` from `app.services.event_bus`.
+2. In sync endpoints (ingest, review, challan): call `event_bus.broadcast_sync("event.name", **payload)`.
+3. In async contexts: `await event_bus.broadcast("event.name", **payload)`.
+4. In WS endpoint: `queue = await event_bus.subscribe()` then `await queue.get()` loop.
+5. Payload builders: `case_ingested_event()`, `case_reviewed_event()`, `challan_issued_event()`.
+
 ---
 
 ## 7. Anti-Patterns to Avoid
@@ -216,6 +228,7 @@ That's it. `app/db.py` already adjusts `connect_args` based on the URL scheme. `
 - Hard-coding `"ingested"`. Use `CaseStatus.ingested`.
 - Adding a new endpoint without a row in `docs/api-contract.md` — the PR review will block on this.
 - Using `join()` in `list_cases` for plate filter — use `Case.vehicle.has(Vehicle.plate.ilike(...))` to avoid cartesian product warnings.
+- Using `asyncio.Queue` in EventBus — breaks sync endpoint broadcasting. Use thread-safe `queue.Queue`.
 
 ---
 
@@ -234,6 +247,8 @@ That's it. `app/db.py` already adjusts `connect_args` based on the URL scheme. `
 | "How to list cases with filters?"                     | `app/services/case_service.py:list_cases()`       |
 | "How to review a case (approve/reject)?"              | `app/services/case_service.py:review_case()`      |
 | "How to run analytics queries?"                       | `app/api/analytics.py` (endpoint) or service funcs |
+| "How to broadcast a WebSocket event?"                 | `app/services/event_bus.py:event_bus.broadcast_sync()` |
+| "How to subscribe to WebSocket events?"               | `app/api/stream.py` — `await event_bus.subscribe()` |
 
 ---
 
@@ -243,3 +258,4 @@ Append a one-liner when you refine this skill sheet.
 
 - `2026-08-17 — Backend Lead — initial skill.md written for Day 1 onboarding.`
 - `2026-08-18 — Alok — added services (evidence_store, case_service), analytics endpoint, Docker, test conventions, anti-patterns for join vs has().`
+- `2026-08-19 — Indra — added cases/challan/stream endpoints, EventBus pub/sub, WebSocket patterns, WS test skip note, updated repo map.`
