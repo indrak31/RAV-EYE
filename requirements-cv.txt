@@ -3,4 +3,5 @@ opencv-python
 numpy
 paddleocr
 pyyaml
+httpx
 pytest

@@ -26,16 +26,16 @@ an Nvidia GPU (Asus TUF); Aryan has a MacBook (CPU only). So:
 | `pipeline/tracker.py` | Real — YOLOv8n + BoT-SORT tracking, tested on real footage (`--track-only`). **Known limitation:** dense/low-resolution traffic still causes ID switches (measured, not just suspected — see comments in the file); flagged as a risk in the original plan, not yet fully solved. |
 | `pipeline/annotator.py` | Real — draws boxes + per-track-id colors |
 | `pipeline/association.py` (`iou`) | Real — has a passing test |
-| `evidence/case_builder.py` | Real shape, matches `docs/api-contract.md` exactly |
-| `run_pipeline.py` | `--dry-run`, `--detect-only`, `--track-only`, `--violations` all work on real video |
+| `evidence/case_builder.py` | Real, and verified against the REAL running backend (not just the markdown doc, which turned out stale in 2 places — `vehicle.plate` actually can't be null, `location` actually can't be null; both fixed here, found by an actual 422 response). |
+| `evidence/evidence_engine.py` | Real — saves 3 evidence frames + a clip using OpenCV directly (not ffmpeg — not installed here, and this avoids a dependency every teammate would separately need). 2 passing tests using a synthetic video. |
+| `pipeline/backend_client.py` | Real — POSTs to `/api/ingest`. Full chain verified end-to-end against a live `uvicorn` backend: real video → real evidence files → real SHA-256 hashes → real POST → real DB row → confirmed retrievable via GET. |
+| `run_pipeline.py` | `--dry-run`, `--detect-only`, `--track-only`, `--violations`, and `--violations --push` (saves evidence + pushes to the backend for real) all work on real video |
 | `pipeline/config.py` | Real — loads `configs/default.yaml`, converts stop-line coords for `RedLightRule` |
 | `pipeline/signal_state.py` | Real — HSV heuristic (top/mid/bottom band = red/yellow/green), verified with synthetic-image tests. **Not yet validated on a real traffic light** — none was detectable in our test clip (too small/distant), so this still needs a real-footage check before trusting it fully. |
 | `pipeline/plate_detector.py`, `ocr_engine.py` | Stub — Aryan's, needs real model code |
 | `rules/red_light_rule.py` | Real logic + **calibrated** for `videoplayback (1).mp4` (Kolkata intersection clip) — stop line measured and confirmed visually, saved in `configs/default.yaml`. Ran end-to-end via `--violations` with no errors. **Not yet confirmed to correctly DETECT a real violation** — the calibration clip shows queued/stationary traffic, not an actual red-light run, so 0 violations found is the expected correct answer for that clip, not proof the detection itself works on a real violation. Needs footage of an actual red-light-jump to fully confirm. |
 | `pipeline/helmet_classifier.py` | Real — wraps a pretrained third-party model (see Model Files below). **Tested on real footage, and it's not great as-is**: produced false-positive boxes on non-people (a billboard, a car roof) at low confidence. `no_helmet_rule.py` is built specifically to survive this, not trust it blindly. |
 | `rules/no_helmet_rule.py` | Real logic: only counts a "without_helmet" detection if it's close to an actual tracked motorcycle (rejects the false positives above by construction) AND persists for 3+ consecutive frames (rejects one-off flicker). 6 passing tests, including one modeled directly on the false positive we saw. Ran end-to-end via `--violations` with no errors; 0 violations on the calibration clip (plausible, not yet proven correct on a real violation — same honest caveat as the red-light rule). |
-| `evidence/evidence_engine.py` | Stub — needs frame-saving + ffmpeg clip logic |
-
 ## Model files (not in git — download separately)
 
 `cv/models/` is gitignored (large binaries don't belong in git). To run
@@ -64,6 +64,10 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --detect-only --output out.mp4
 .venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --track-only --output out.mp4
 .venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --violations --output out.mp4
+
+# Full loop: also saves evidence + pushes any violation to the backend (needs it running):
+#   uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+.venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --violations --push
 ```
 
 Needs Python 3.11 or 3.12 specifically — newer Python versions (e.g. 3.14)

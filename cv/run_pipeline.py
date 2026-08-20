@@ -25,6 +25,7 @@ import argparse
 import sys
 import time
 from collections import Counter
+from datetime import datetime, timezone
 
 from cv.pipeline.video_reader import get_video_meta, read_frames
 
@@ -59,6 +60,16 @@ def parse_args() -> argparse.Namespace:
         help="Full red-light pipeline: detect + track + read the traffic light color + check the "
         "calibrated stop line. Prints any violations found. Needs configs/default.yaml's "
         "camera.stop_line to be calibrated (see cv/rules/red_light_rule.py for how).",
+    )
+    parser.add_argument(
+        "--push",
+        action="store_true",
+        help="With --violations: for each violation found, save evidence (frames + clip) and "
+        "POST it to the backend's /api/ingest. Needs the backend running (see --backend-url).",
+    )
+    parser.add_argument("--backend-url", default="http://127.0.0.1:8000", help="Backend base URL for --push")
+    parser.add_argument(
+        "--media-dir", default="media/evidence", help="Where to save evidence frames/clips for --push"
     )
     parser.add_argument(
         "--limit-frames",
@@ -266,11 +277,45 @@ def run_violations(args) -> int:
     red_light_rule = RedLightRule(stop_line=stop_line)
     no_helmet_rule = NoHelmetRule()
 
+    meta = get_video_meta(args.video)
     writer = None
     if args.output:
-        meta = get_video_meta(args.video)
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(args.output, fourcc, meta.fps, (meta.width, meta.height))
+
+    camera_id = config.get("camera", {}).get("camera_id", "CAM-UNKNOWN")
+
+    def _push_violation(violation, frame_number: int) -> None:
+        """Save evidence + POST to the backend. Isolated so one failed
+        push (backend down, disk full, etc.) doesn't crash the whole run —
+        we print the error and keep processing the rest of the video."""
+        import uuid
+
+        from cv.evidence.case_builder import build_ingest_request, evidence_refs_from_package
+        from cv.evidence.evidence_engine import build_evidence
+        from cv.pipeline.backend_client import push_case
+
+        try:
+            case_id_hint = str(uuid.uuid4())[:8]
+            package = build_evidence(
+                video_path=args.video,
+                trigger_frame_number=frame_number,
+                fps=meta.fps,
+                output_dir=args.media_dir,
+                case_id=case_id_hint,
+            )
+            evidence_refs = evidence_refs_from_package(package, width=meta.width, height=meta.height)
+            payload = build_ingest_request(
+                violation_type=violation.violation_type,
+                camera_id=camera_id,
+                occurred_at_iso=datetime.now(timezone.utc).isoformat(),
+                evidence_refs=evidence_refs,
+                client_request_id=f"cv-{case_id_hint}-track{violation.vehicle_track_id}",
+            )
+            result = push_case(payload, base_url=args.backend_url)
+            print(f"     -> pushed to backend: case_id={result['case_id']} status={result['status']}")
+        except Exception as exc:  # noqa: BLE001 - log and keep the pipeline running
+            print(f"     -> FAILED to push violation to backend: {exc}")
 
     frame_total = 0
     violations_found = []
@@ -288,6 +333,8 @@ def run_violations(args) -> int:
         if violation is not None:
             violations_found.append(violation)
             print(f"  !! VIOLATION at frame {frame_number}: {violation}")
+            if args.push:
+                _push_violation(violation, frame_number)
 
         if helmet_classifier is not None:
             helmet_detections = helmet_classifier.detect(frame)
@@ -295,6 +342,8 @@ def run_violations(args) -> int:
             if helmet_violation is not None:
                 violations_found.append(helmet_violation)
                 print(f"  !! VIOLATION at frame {frame_number}: {helmet_violation}")
+                if args.push:
+                    _push_violation(helmet_violation, frame_number)
 
         if writer is not None:
             annotated = draw_tracked_objects(frame, tracked_objects)
