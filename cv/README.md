@@ -27,10 +27,11 @@ an Nvidia GPU (Asus TUF); Aryan has a MacBook (CPU only). So:
 | `pipeline/annotator.py` | Real — draws boxes + per-track-id colors |
 | `pipeline/association.py` (`iou`) | Real — has a passing test |
 | `evidence/case_builder.py` | Real shape, matches `docs/api-contract.md` exactly |
-| `run_pipeline.py` | `--dry-run`, `--detect-only`, `--track-only` all work on real video |
+| `run_pipeline.py` | `--dry-run`, `--detect-only`, `--track-only`, `--violations` all work on real video |
+| `pipeline/config.py` | Real — loads `configs/default.yaml`, converts stop-line coords for `RedLightRule` |
 | `pipeline/signal_state.py` | Real — HSV heuristic (top/mid/bottom band = red/yellow/green), verified with synthetic-image tests. **Not yet validated on a real traffic light** — none was detectable in our test clip (too small/distant), so this still needs a real-footage check before trusting it fully. |
 | `pipeline/plate_detector.py`, `ocr_engine.py` | Stub — Aryan's, needs real model code |
-| `rules/red_light_rule.py` | Real logic (crossing detection + red-light check), 5 passing tests using fake vehicle positions. **Stop line is a placeholder (`None`)** — rule stays silent until a real camera's stop-line pixel coordinates are measured and put in `configs/default.yaml`. See the file for calibration steps. |
+| `rules/red_light_rule.py` | Real logic + **calibrated** for `videoplayback (1).mp4` (Kolkata intersection clip) — stop line measured and confirmed visually, saved in `configs/default.yaml`. Ran end-to-end via `--violations` with no errors. **Not yet confirmed to correctly DETECT a real violation** — the calibration clip shows queued/stationary traffic, not an actual red-light run, so 0 violations found is the expected correct answer for that clip, not proof the detection itself works on a real violation. Needs footage of an actual red-light-jump to fully confirm. |
 | `rules/no_helmet_rule.py` | Stub — needs a helmet classifier first |
 | `evidence/evidence_engine.py` | Stub — needs frame-saving + ffmpeg clip logic |
 
@@ -45,6 +46,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --dry-run
 .venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --detect-only --output out.mp4
 .venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --track-only --output out.mp4
+.venv\Scripts\python.exe -m cv.run_pipeline --video path\to\clip.mp4 --violations --output out.mp4
 ```
 
 Needs Python 3.11 or 3.12 specifically — newer Python versions (e.g. 3.14)

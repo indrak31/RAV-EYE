@@ -32,7 +32,10 @@ from cv.pipeline.video_reader import get_video_meta, read_frames
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the CV pipeline on a video file.")
     parser.add_argument("--video", required=True, help="Path to input video file")
-    parser.add_argument("--config", default="cv/configs/default.yaml", help="Path to config YAML")
+    parser.add_argument(
+        "--config", default=None,
+        help="Path to config YAML (defaults to cv/configs/default.yaml, resolved regardless of cwd)",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -49,6 +52,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run detection + tracking (ByteTrack) — each object gets a stable ID across frames. "
         "No violation rules yet.",
+    )
+    parser.add_argument(
+        "--violations",
+        action="store_true",
+        help="Full red-light pipeline: detect + track + read the traffic light color + check the "
+        "calibrated stop line. Prints any violations found. Needs configs/default.yaml's "
+        "camera.stop_line to be calibrated (see cv/rules/red_light_rule.py for how).",
     )
     parser.add_argument(
         "--limit-frames",
@@ -181,6 +191,103 @@ def run_track_only(args) -> int:
     return 0
 
 
+def run_violations(args) -> int:
+    """The real target: detect + track + read the signal + check the
+    calibrated stop line, and report any red-light violations found."""
+    import cv2
+
+    from cv.pipeline.annotator import draw_tracked_objects
+    from cv.pipeline.config import load_config, stop_line_from_config
+    from cv.pipeline.signal_state import SignalColor, classify_signal_crop
+    from cv.pipeline.tracker import Tracker
+    from cv.rules.red_light_rule import RedLightRule
+
+    config = load_config(args.config)
+    stop_line = stop_line_from_config(config)
+    if stop_line is None:
+        print(
+            "No calibrated stop line in configs/default.yaml (camera.stop_line is null).\n"
+            "The rule will run but can never fire. See cv/rules/red_light_rule.py for how to calibrate."
+        )
+    else:
+        print(f"Using calibrated stop line: {stop_line}")
+
+    print("Loading YOLO + BoT-SORT...")
+    tracker = Tracker(device="cuda")
+    try:
+        tracker.load()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Could not load on GPU ('cuda'): {exc}\nFalling back to CPU...")
+        tracker = Tracker(device="cpu")
+        tracker.load()
+
+    red_light_rule = RedLightRule(stop_line=stop_line)
+
+    writer = None
+    if args.output:
+        meta = get_video_meta(args.video)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(args.output, fourcc, meta.fps, (meta.width, meta.height))
+
+    frame_total = 0
+    violations_found = []
+    start = time.time()
+
+    for frame_number, frame in read_frames(args.video, resize_width=None):
+        if args.limit_frames is not None and frame_number >= args.limit_frames:
+            break
+
+        tracked_objects = tracker.update(frame)
+
+        # Find a traffic light among what we tracked this frame, if any,
+        # and read its color. Real footage may simply not show one every
+        # frame (or at all, depending on camera angle) — that's fine, the
+        # rule just stays silent (signal UNKNOWN) when we can't tell.
+        signal_color = SignalColor.UNKNOWN
+        signal_confidence = 0.0
+        for obj in tracked_objects:
+            if obj.class_name == "traffic light":
+                signal_color, signal_confidence = classify_signal_crop(frame, obj.box_xyxy)
+                break
+
+        frame_context = {
+            "signal_color": signal_color,
+            "signal_confidence": signal_confidence,
+            "frame_number": frame_number,
+        }
+        violation = red_light_rule(tracked_objects, frame_context)
+        if violation is not None:
+            violations_found.append(violation)
+            print(f"  !! VIOLATION at frame {frame_number}: {violation}")
+
+        if writer is not None:
+            annotated = draw_tracked_objects(frame, tracked_objects)
+            if stop_line is not None:
+                p1, p2 = stop_line
+                cv2.line(annotated, (int(p1[0]), int(p1[1])), (int(p2[0]), int(p2[1])), (0, 0, 255), 2)
+            cv2.putText(
+                annotated, f"SIGNAL: {signal_color.value}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2,
+            )
+            writer.write(annotated)
+
+        frame_total += 1
+        if frame_total % 30 == 0:
+            print(f"  ...processed {frame_total} frames")
+
+    if writer is not None:
+        writer.release()
+
+    elapsed = time.time() - start
+    fps = frame_total / elapsed if elapsed > 0 else 0.0
+
+    print(f"\nProcessed {frame_total} frames in {elapsed:.1f}s ({fps:.1f} FPS).")
+    print(f"Violations found: {len(violations_found)}")
+    if args.output:
+        print(f"Annotated video (stop line + signal color overlaid) written to: {args.output}")
+    return 0
+
+
 def main() -> int:
     args = parse_args()
 
@@ -198,11 +305,14 @@ def main() -> int:
     if args.track_only:
         return run_track_only(args)
 
+    if args.violations:
+        return run_violations(args)
+
     print(
-        "\nFull pipeline (rules + evidence + push to backend) is not wired yet.\n"
-        "What IS working: detection AND tracking. Try:\n"
-        "  python -m cv.run_pipeline --video <path> --track-only --limit-frames 60 --output out.mp4\n"
-        "Next to build: rules/no_helmet_rule.py + rules/red_light_rule.py."
+        "\nFull pipeline (evidence saving + push to backend) is not wired yet.\n"
+        "What IS working: detection, tracking, AND the red-light rule. Try:\n"
+        "  python -m cv.run_pipeline --video <path> --violations --output out.mp4\n"
+        "Next to build: rules/no_helmet_rule.py, then evidence saving + /api/ingest push."
     )
     return 1
 

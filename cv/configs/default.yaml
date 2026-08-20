@@ -13,7 +13,14 @@ tracker:
 # only one demo camera for now, so this file's defaults are enough).
 camera:
   camera_id: CAM-DEMO-01
-  stop_line: null        # TODO(Meghana): fill in [x1,y1,x2,y2] once we calibrate on the demo clip
+  # Calibrated 2026-08-20 against "videoplayback (1).mp4" (Kolkata
+  # intersection clip), frame 100, resolution 480x854. [x1,y1,x2,y2] is
+  # two points tracing the crosswalk/stop-line on the road, confirmed
+  # visually against the actual footage. ONLY valid for this exact camera
+  # angle/framing — a different clip/camera needs its own calibration
+  # (repeat the same process: grab a frame, overlay a pixel grid, eyeball
+  # the line, confirm against the drawn overlay).
+  stop_line: [170, 445, 430, 450]
 
 evidence:
   output_dir: media/evidence
